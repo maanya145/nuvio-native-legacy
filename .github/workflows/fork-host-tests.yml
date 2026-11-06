@@ -1,0 +1,47 @@
+name: Fork host tests
+# Linux host tests for this fork's work: PGS decoding and acquisition, the
+# read-ahead proxy, the shared media buffer and the DTS helpers. Runs the same
+# groups as `bash tools/test-host.sh` (see AGENTS.md). It never builds an .ipk
+# and has no secrets.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fork-host-tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  host:
+    if: github.repository == 'maanya145/nuvio-native-legacy'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      NUVIO_DTS_ROOT: /tmp/nuvio-dts-host
+      TEST_TIMEOUT: "400"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config curl xz-utils python3 openssl \
+            ripgrep zlib1g-dev libssl-dev libsdl2-dev libgles2-mesa-dev libegl1-mesa-dev
+      - name: Restore host FFmpeg
+        id: ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: /tmp/nuvio-dts-host
+          key: host-ffmpeg-${{ runner.os }}-${{ hashFiles('tools/build-dts-ffmpeg.sh') }}
+      - name: Build host FFmpeg (same components as the TV build)
+        if: steps.ffmpeg.outputs.cache-hit != 'true'
+        env:
+          CC: gcc
+          NUVIO_DTS_HOST: "1"
+          NUVIO_DTS_JOBS: "4"
+        run: bash tools/build-dts-ffmpeg.sh
+      - name: Host tests (quick group)
+        run: bash tools/test-host.sh quick

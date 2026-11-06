@@ -20,5 +20,5 @@ cc -std=gnu11 -Wall -Wextra -Werror -Wno-misleading-indentation \
   -DNV_DTS_FFMPEG -DNV_DTS_WEBOS_RECOVERY -Isrc -I"$prefix/include" \
   src/dts/dts_engine.c tests/dts_buffer_reporting.c src/rede.c src/redeurl.c \
   -o "$tmp/test" -L"$prefix/lib" -Wl,--start-group \
-  -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lm -lpthread -ldl
+  -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lz -lm -lpthread -ldl
 "$tmp/test" "http://127.0.0.1:$(cat "$tmp/port")/telemetry/sdr-dts.mkv"

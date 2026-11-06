@@ -63,6 +63,9 @@ listas-p*.txt
 !/INSTALL.md
 !/INSTALAR.md
 !/AVISOS.md
+# Agent instructions for this fork (CLAUDE.md imports AGENTS.md).
+!/AGENTS.md
+!/CLAUDE.md
 /docs/*.md
 /design/**/*.md
 /tests/*.md

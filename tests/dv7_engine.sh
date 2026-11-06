@@ -15,6 +15,6 @@ python3 tests/dv7_fixture.py "$dir"
 cc -std=gnu11 -Wall -Wextra -Werror -DNV_DTS_FFMPEG ${NV_TEST_DTS_RECOVERY_CFLAGS--DNV_DTS_WEBOS_RECOVERY} -DNV_DV7_CONVERSION \
   -I"$prefix/include" src/dts/dts_engine.c tests/dv7_engine.c -o "$dir/engine" \
   -L"$prefix/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil \
-  -Wl,--end-group build/dv7-host/libnuvio_dv7.a -lm -lpthread -ldl
+  -Wl,--end-group -lz build/dv7-host/libnuvio_dv7.a -lm -lpthread -ldl
 "$dir/engine" "$dir/fel.mkv" "$dir/fel-bad.mkv"
 "$dir/engine" "$dir/mel.mkv" "$dir/mel-bad.mkv"

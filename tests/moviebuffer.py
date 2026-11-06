@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Native-URI cache: real HTTP, all budgets, seek/concurrent clients/fallback."""
-import concurrent.futures,http.server,pathlib,re,select,ssl,subprocess,sys,threading,time,urllib.request,urllib.error
+import concurrent.futures,http.client,http.server,pathlib,re,select,ssl,subprocess,sys,threading,time,urllib.parse,urllib.request,urllib.error
 requests=[]
 leaks=[]
 origin_stalled=threading.Event()
@@ -32,6 +32,9 @@ class Origin(http.server.BaseHTTPRequestHandler):
         if self.path=='/finite-playlist':
             body=b'#EXTM3U\n#EXT-X-ENDLIST\n'
             self.send_response(206);self.send_header('Content-Range',f'bytes 0-{len(body)-1}/{len(body)}');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+        if self.path=='/slow-redirect':
+            time.sleep(1.2)
+            self.send_response(307);self.send_header('Location','/movie.mkv');self.send_header('Content-Length','0');self.end_headers();return
         if self.path=='/redirect':
             self.send_response(307);self.send_header('Location','/movie.mkv');self.send_header('Content-Length','0');self.end_headers();return
         if self.path=='/cross':
@@ -90,6 +93,22 @@ def stats(p):
 def close(p):
     begun=time.monotonic();p.stdin.write('q\n');p.stdin.flush();p.communicate(timeout=8)
     assert p.returncode==0 and time.monotonic()-begun<8
+def no_follow(url):
+    u=urllib.parse.urlsplit(url);c=http.client.HTTPConnection(u.hostname,u.port,timeout=15)
+    c.request('GET',u.path,headers={'Range':'bytes=0-'});r=c.getresponse();body=r.read();c.close()
+    return r.status,r.getheader('Location'),body
+def copy(p,off,n,other=''):
+    p.stdin.write(f'c {off} {n} {other}\n');p.stdin.flush()
+    while True:
+        line=p.stdout.readline();assert line
+        if line.startswith('COPY '):return tuple(map(int,line.split()[1:]))
+def copy_until(p,off,n,seconds=12):
+    deadline=time.monotonic()+seconds
+    while True:
+        got,ok=copy(p,off,n);assert ok,(off,n)
+        if got==n:return
+        assert got==0,(off,n,got)
+        assert time.monotonic()<deadline,('ring never held',off,n);time.sleep(.05)
 def request(url,start,end=None,method='GET'):
     r=f'bytes={start}-'+('' if end is None else str(end))
     with urllib.request.urlopen(urllib.request.Request(url,headers={'Range':r},method=method),timeout=15) as f:
@@ -97,17 +116,18 @@ def request(url,start,end=None,method='GET'):
 mode=sys.argv[4] if len(sys.argv)>4 else 'all'
 if mode in ('all','startup'):
     source=origin+'/stall'
-    p=subprocess.Popen([sys.argv[1],source,'64'],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
     begun=time.monotonic()
-    output=b''
+    p,url=daemon('/stall',64)
     try:
-        while b'URL OFF\n' not in output:
-            assert time.monotonic()-begun<2, 'startup blocked UI for over two seconds'
-            if select.select([p.stdout],[],[],.05)[0]:output+=p.stdout.read1(4096)
-        p.stdin.write(b'q\n');p.stdin.flush();p.communicate(timeout=2)
-        assert p.returncode==0
-    finally:
-        if p.poll() is None:p.kill();p.communicate()
+        assert time.monotonic()-begun<.4,'startup blocked the UI'
+        assert url!='OFF'
+        begun=time.monotonic()
+        status,location,body=no_follow(url)
+        waited=time.monotonic()-begun
+        assert status==302 and location==source and not body,(status,location,len(body))
+        assert waited<11,f'origin check waited {waited:.1f}s'
+        assert stats(p)[0]==-1
+    finally:close(p)
     print('PASS stalled startup: bounded fallback and cancellation',flush=True)
     if mode=='startup':sys.exit(0)
 if mode in ('all','preempt'):
@@ -149,6 +169,18 @@ if mode in ('all','stalled-preempt'):
             close(p);release_stall.set()
     print('PASS distant and near-forward replacements interrupt stalled origin; cached metadata reuses it',flush=True)
     if mode=='stalled-preempt':sys.exit(0)
+# Debrid add-on links resolve through redirects that take over a second. Startup
+# must not freeze the UI waiting for them, and must not give up on the cache.
+begun=time.monotonic()
+p,url=daemon('/slow-redirect',64)
+started=time.monotonic()-begun
+try:
+    assert started<.4,f'startup blocked the UI for {started:.2f}s'
+    assert url!='OFF','cache abandoned because the origin redirect was slow'
+    status,_,body=request(url,0,65535)
+    assert status==206 and body==content(0,65536)
+finally:close(p)
+print('PASS slow redirect: startup stays non-blocking and the cache is kept',flush=True)
 for mib in [64,128,256]:
     p,url=daemon('/movie.mkv',mib)
     try:
@@ -178,14 +210,41 @@ for mib in [64,128,256]:
         paused.close()
         print(f'PASS native URI {mib} MiB: full prefetch cap, byte equality, seeks, concurrent ranges, HEAD/suffix/invalid ranges, cancellation',flush=True)
     finally:close(p)
+# Side copies (subtitle collector): exact bytes, never a prefix, never stale.
+if mode in ('all','copy'):
+    MiB=1024*1024
+    p,url=daemon('/movie.mkv',64)
+    try:
+        assert url!='OFF'
+        assert request(url,0,1023)[2]==content(0,1024)
+        copy_until(p,17,MiB)                                  # 1 MiB in 64 KiB pieces
+        assert copy(p,17,MiB+1)==(0,1)                        # over the cap: miss
+        assert copy(p,17,4096,origin+'/other.mkv')==(0,1)     # another source: miss
+        assert copy(p,TOTAL-MiB,MiB)==(0,1)                   # never downloaded: miss
+        # Play forward 40 MiB: the ring advances past its physical end, so a
+        # copy straddling the wrap must come back whole and in order.
+        with urllib.request.urlopen(urllib.request.Request(url,headers={'Range':f'bytes=0-{TOTAL-1}'}),timeout=15) as f:
+            left=40*MiB
+            while left:left-=len(f.read(min(left,MiB)))
+            copy_until(p,64*MiB-MiB//2-3,MiB)
+        # Seek far ahead: the old offsets leave the window; nothing stale.
+        assert request(url,300*MiB,300*MiB+1023)[2]==content(300*MiB,1024)
+        copy_until(p,300*MiB+5,MiB)
+        assert copy(p,64*MiB-MiB//2-3,MiB)==(0,1)
+        assert copy(p,17,4096)==(0,1)
+        print('PASS side copy: exact bytes, ring wrap, cap/source/missing misses, seek invalidates',flush=True)
+    finally:close(p)
+    if mode=='copy':sys.exit(0)
 for path in ['/video.m3u8','/video.mpd']:
     p,url=daemon(path,64);assert url=='OFF';close(p)
 p,url=daemon('/movie.mkv',0);assert url=='OFF';close(p)
 for path in ['/finite-playlist','/unsupported']:
     p,url=daemon(path,64)
     try:
-        assert url=='OFF', 'fallback must preserve native preset before load'
-        assert stats(p)[0]==0
+        assert url!='OFF'
+        status,location,body=no_follow(url)
+        assert status==302 and location==origin+path and not body,(status,location,len(body))
+        assert stats(p)[0]==-1
     finally:close(p)
 print('PASS native URI: playlists/off bypass and unsupported-origin redirect before media bytes')
 for path in ['/capped','/broken','/redirect','/cross','/opaque','/opaque-mp4']:
@@ -204,6 +263,7 @@ for path in ['/capped','/broken','/redirect','/cross','/opaque','/opaque-mp4']:
 # Large distant requests must not alternate engine seeks per 64 KiB chunk.
 p,url=daemon('/movie.mkv',64)
 try:
+    request(url,0,0)  # the origin check now finishes after startup returns
     requests.clear()
     starts=[0,300*1024*1024]
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
@@ -221,7 +281,7 @@ finally:close(p)
 print('PASS TLS downgrade: no caller headers on probe, stream or seek',flush=True)
 p,url=daemon('/stall',64)
 try:
-    assert url=='OFF', 'failed startup probe must preserve native buffering'
+    assert url!='OFF'  # close() asserts that stopping during the stalled check stays fast
 finally:close(p)
 print('PASS single connection: stalled origin cancellation stays below 8 seconds',flush=True)
 server.shutdown();tls.shutdown()

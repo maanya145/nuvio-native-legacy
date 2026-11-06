@@ -40,6 +40,15 @@ DtsEngine *dts_engine_source_create(const char *url, const char *headers, int mi
 /* pending_fd: replacement listener, or -1 for a non-preemptible read. */
 int dts_engine_source_read(DtsEngine *, int64_t offset, unsigned char *data, int n, int pending_fd);
 int64_t dts_engine_source_total(DtsEngine *);
+/* Non-consuming view of the read-ahead ring (webOS moviebuffer): bytes
+ * [lo, hi) of the file are cached in the ring, and `gen` changes on every
+ * discontinuity (seek, restart, close), so a reader knows its cursor went
+ * stale. Both calls try the ring lock and never touch the player cursor;
+ * `peek` accepts <=64 KiB and may stop at the physical wrap. A busy lock or
+ * byte outside the window returns 0. Engine lifetime is the caller's job. */
+typedef struct { int64_t lo, hi; uint64_t gen; } DtsSourceWindow;
+int dts_engine_source_window(DtsEngine *, DtsSourceWindow *out);
+int dts_engine_source_peek(DtsEngine *, int64_t offset, unsigned char *dst, int n);
 DtsEngine *dts_engine_create(void);
 int dts_engine_available(void);
 /* Dolby Vision path, set before open: AC-3/E-AC-3 tracks are selectable and

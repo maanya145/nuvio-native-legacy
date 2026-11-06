@@ -13,5 +13,5 @@ ${CC:-gcc} -std=gnu11 -Wall -Wextra -Werror -Isrc \
 ${CC:-gcc} -std=gnu11 -Wall -Wextra -Werror -DNV_DTS_FFMPEG \
   -I"$DTS_SUBTITLE_PREFIX/include" -Isrc tests/dts_subtitles.c \
   -o "$DTS_SUBTITLE_DIR/subtitles" -L"$DTS_SUBTITLE_PREFIX/lib" \
-  -Wl,--start-group -lavcodec -lavutil -Wl,--end-group -lm -lpthread
+  -Wl,--start-group -lavcodec -lavutil -Wl,--end-group -lz -lm -lpthread
 "$DTS_SUBTITLE_DIR/subtitles"

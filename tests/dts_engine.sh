@@ -11,7 +11,7 @@ SERVER_PID=""
 trap 'if [ -n "$SERVER_PID" ]; then kill "$SERVER_PID" 2>/dev/null || true; fi; rm -rf "$TMP"' EXIT
 ${CC:-gcc} -std=gnu11 -Wall -Wextra -Werror -DNV_DTS_FFMPEG ${NV_TEST_DTS_RECOVERY_CFLAGS--DNV_DTS_WEBOS_RECOVERY} -I"$PREFIX/include" \
   src/dts/dts_engine.c tests/dts_engine.c -o "$TMP/engine" \
-  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lm -lpthread
+  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lz -lm -lpthread
 printf '1\n00:00:00,500 --> 00:00:01,500\nDTS subtitle fixture\n' > "$TMP/input.srt"
 ffmpeg -hide_banner -loglevel error \
   -f lavfi -i 'color=size=64x64:rate=25:duration=4' \
@@ -76,7 +76,7 @@ with open(sys.argv[2],'wb') as out:
 PY
 ${CC:-gcc} -std=gnu11 -Wall -Wextra -Werror -Wno-misleading-indentation -DNV_DTS_FFMPEG ${NV_TEST_DTS_RECOVERY_CFLAGS--DNV_DTS_WEBOS_RECOVERY} -DDTS_ENGINE_HTTP -I"$PREFIX/include" \
   src/dts/dts_engine.c tests/dts_engine.c src/rede.c src/redeurl.c -o "$TMP/http-engine" \
-  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lm -lpthread -ldl
+  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lz -lm -lpthread -ldl
 python3 tests/dts_engine_server.py "$TMP" "$TMP/port" "$TMP/requests" &
 SERVER_PID=$!
 for step in $(seq 50); do [ -s "$TMP/port" ] && break; sleep .1; done
@@ -93,7 +93,7 @@ with open(sys.argv[1].replace("range.bin", "prefetch.bin"),"wb") as out:
 PY
 ${CC:-gcc} -std=gnu11 -Wall -Wextra -Werror -Wno-misleading-indentation -I"$PREFIX/include" \
   tests/dts_engine_avio.c src/rede.c src/redeurl.c -o "$TMP/range" \
-  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lm -lpthread -ldl
+  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lz -lm -lpthread -ldl
 "$TMP/range" "http://127.0.0.1:$PORT/parallel/range.bin"
 "$TMP/range" "http://127.0.0.1:$PORT/slow/range.bin"
 "$TMP/range" "http://127.0.0.1:$PORT/prefetch/prefetch.bin"
@@ -101,7 +101,7 @@ cp "$TMP/prefetch.bin" "$TMP/dv-prefetch.bin"
 "$TMP/range" "http://127.0.0.1:$PORT/prefetch/dv-prefetch.bin"
 ${CC:-gcc} -std=gnu11 -Wall -Wextra -Werror -Wno-misleading-indentation -DRANGE_WORKERS=1 -I"$PREFIX/include" \
   tests/dts_engine_avio.c src/rede.c src/redeurl.c -o "$TMP/serial-range" \
-  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lm -lpthread -ldl
+  -L"$PREFIX/lib" -Wl,--start-group -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lz -lm -lpthread -ldl
 "$TMP/serial-range" "http://127.0.0.1:$PORT/parallel/range.bin"
 "$TMP/serial-range" "http://127.0.0.1:$PORT/prefetch/prefetch.bin"
 "$TMP/http-engine" "http://127.0.0.1:$PORT/input.mkv" "$TMP/http-mkv.aac"
