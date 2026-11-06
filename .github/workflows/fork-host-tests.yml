@@ -1,8 +1,9 @@
 name: Fork host tests
 # Linux host tests for this fork's work: PGS decoding and acquisition, the
-# read-ahead proxy, the shared media buffer, the DTS helpers and every mkvass
-# test. Runs the same groups as `bash tools/test-host.sh` (see AGENTS.md). It never builds an .ipk
-# and has no secrets.
+# read-ahead proxy, the shared media buffer, the DTS helpers and the mkvass
+# tests that build on Linux (four macOS-only harnesses are skipped below).
+# Runs the same groups as `bash tools/test-host.sh` (see AGENTS.md). It never
+# builds an .ipk and has no secrets.
 on:
   push:
     branches: [master]
