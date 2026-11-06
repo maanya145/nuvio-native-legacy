@@ -11,6 +11,8 @@
 # macOS has no `timeout`: this falls back to `gtimeout` (coreutils), then perl.
 # Exit status is non-zero if any script failed. A script that prints SKIP is
 # reported as not verified, not as passed.
+# TEST_SKIP="name name" skips scripts by basename (used by Linux CI for tests
+# that only build on macOS); each skip is listed in the summary.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
@@ -53,6 +55,7 @@ for s in "${scripts[@]}"; do
   case "$seen" in *" $s "*) continue ;; esac
   seen="$seen$s "
   name=$(basename "$s" .sh)
+  case " ${TEST_SKIP:-} " in *" $name "*) echo "SKIP  $name (TEST_SKIP)"; skip=$((skip + 1)); continue ;; esac
   start=$(date +%s)
   run_limited bash "$s" >"$logs/$name.log" 2>&1 </dev/null
   rc=$?

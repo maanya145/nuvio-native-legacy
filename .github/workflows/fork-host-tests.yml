@@ -47,4 +47,9 @@ jobs:
         run: bash tools/test-host.sh quick
       - name: Host tests (mkvass group)
         if: ${{ !cancelled() }}
+        # macOS-only upstream harnesses: mkv_legendas needs /opt/homebrew/bin/ffmpeg,
+        # mkvass_texto passes -dead_strip, and mkvass/mkvass_url rely on the macOS
+        # linker dropping unused video.c code. They run in the macOS mkvass group.
+        env:
+          TEST_SKIP: mkv_legendas mkvass mkvass_url mkvass_texto
         run: bash tools/test-host.sh mkvass

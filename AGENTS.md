@@ -102,7 +102,10 @@ treating it as a regression.
 CI (`.github/workflows/fork-host-tests.yml`) runs the `quick` and `mkvass`
 groups on Linux for every push and PR to this fork. Linux needs explicit
 `-lm` and `-lz` where macOS does not, so link them in every test that
-compiles `src/mkvass.c` or links the static host FFmpeg.
+compiles `src/mkvass.c` or links the static host FFmpeg. Four upstream `mkvass`
+tests only build on macOS (`mkv_legendas`, `mkvass`, `mkvass_url`,
+`mkvass_texto`); CI skips them with `TEST_SKIP`, so run the `mkvass` group on
+a Mac before merging changes to `src/mkvass.c`.
 
 ## The TV
 
