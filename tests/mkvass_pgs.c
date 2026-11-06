@@ -12,6 +12,25 @@
 #include <unistd.h>
 
 #include "mkvass_pgs_transport.h"
+#ifdef TEST_BUFFER_COPY
+static long copias, bytesCopiados;
+// Simula o anel completo: toda leitura exata vem do arquivo local. O contador
+// prova que o coletor nao caiu no Range da rede.
+int moviebuffer_copiar(const char *url, int64_t off, unsigned char *dst, int n) {
+  FILE *f; long t;
+  if (strcmp(url, esperado) || off < 0 || n <= 0 || n > 1024 * 1024) return 0;
+  f = fopen(arquivo, "rb"); assert(f);
+  fseek(f, 0, SEEK_END); t = ftell(f);
+  if (off + n > t) { fclose(f); return 0; }
+  fseek(f, (long)off, SEEK_SET);
+  assert(fread(dst, 1, (size_t)n, f) == (size_t)n);
+  fclose(f);
+  pthread_mutex_lock(&trava);
+  copias++; bytesCopiados += n;
+  pthread_mutex_unlock(&trava);
+  return n;
+}
+#endif
 int main(int argc, char **argv) {
   assert(argc == 2); dados_iniciar(".");
   arquivo = argv[1];
@@ -57,5 +76,11 @@ int main(int argc, char **argv) {
   usleep(500000);
   assert(!imgsub_pegar(1.5));
   parar();
+#ifdef TEST_BUFFER_COPY
+  assert(pedidos == 0);
+  assert(copias > 0 && bytesCopiados > 0);
+  printf("mkvass_pgs_cache: %ld leituras, %ld bytes sem HTTP Range\n", copias, bytesCopiados);
+#else
   puts("mkvass_pgs: bloco PGS vira quadro no imgsub, limpeza e recusa ok");
+#endif
 }

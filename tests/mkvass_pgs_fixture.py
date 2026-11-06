@@ -1,5 +1,8 @@
 import sys, pathlib, zlib
 p=pathlib.Path(sys.argv[1])
+# Optional trailing Void size for the indexed fixtures. The ring-copy variant
+# needs files larger than mkvass's 16 KiB header read, or it falls back to HTTP.
+PAD=int(sys.argv[2]) if len(sys.argv)>2 else 1024
 def el(i,b):
     return i.to_bytes((i.bit_length()+7)//8,'big') + (0x10000000|len(b)).to_bytes(4,'big') + b
 def u(i,n): return el(i,n.to_bytes(4,'big'))
@@ -28,10 +31,10 @@ for nome,(enc,cod) in MODOS.items():
     sh=el(0x114d9b74,el(0x4dbb,el(0x53ab,bytes.fromhex('1c53bb6b'))+u(0x53ac,0)))
     sh=el(0x114d9b74,el(0x4dbb,el(0x53ab,bytes.fromhex('1c53bb6b'))+u(0x53ac,len(sh)+len(tr)+len(cluster))))
     cues=el(0x1c53bb6b,b''.join(el(0xbb,u(0xb3,t)+el(0xb7,u(0xf7,6)+u(0xf1,len(sh)+len(tr))+u(0xf0,r))) for t,r in zip((1250,5000),rel)))
-    p.joinpath(nome+'.mkv').write_bytes(el(0x1a45dfa3,el(0x4282,b'matroska'))+el(0x18538067,sh+tr+cluster+cues+el(0xec,b'\0'*1024)))
+    p.joinpath(nome+'.mkv').write_bytes(el(0x1a45dfa3,el(0x4282,b'matroska'))+el(0x18538067,sh+tr+cluster+cues+el(0xec,b'\0'*PAD)))
     # Subtitle CuePoints without relative positions force cluster scanning.
     scan_cues=el(0x1c53bb6b,el(0xbb,u(0xb3,1250)+el(0xb7,u(0xf7,6)+u(0xf1,len(sh)+len(tr)))))
-    p.joinpath(nome+'-scan.mkv').write_bytes(el(0x1a45dfa3,el(0x4282,b'matroska'))+el(0x18538067,sh+tr+cluster+scan_cues+el(0xec,b'\0'*1024)))
+    p.joinpath(nome+'-scan.mkv').write_bytes(el(0x1a45dfa3,el(0x4282,b'matroska'))+el(0x18538067,sh+tr+cluster+scan_cues+el(0xec,b'\0'*PAD)))
 
 # Video-only cue index: fallback must search clusters, including sparse/late PGS.
 # Large unrelated blocks ensure that acquisition crosses multiple byte ranges.

@@ -39,3 +39,11 @@ for route in redir/sparse norange/sparse missing; do
 done
 cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra tests/mkvass_pgs_budget.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -o "$DIR/budget"
 NUVIO_DADOS="$DIR/dados" "$DIR/budget" "$DIR/sparse.mkv"
+# Forca o transporte "ja esta no anel": a mesma url nunca chega a rede.
+cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra -DMKVASS_RANGES_POR_SEG=1000 -DMKVASS_PGS_SCAN_MS=50 -DTEST_BUFFER_COPY tests/mkvass_pgs.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -o "$DIR/test-cache"
+mkdir "$DIR/dados-cache" "$DIR/cache"
+python3 tests/mkvass_pgs_fixture.py "$DIR/cache" 20000
+for modo in plain zlib strip; do
+  echo "== PGS cache $modo"
+  NUVIO_DADOS="$DIR/dados-cache" "$DIR/test-cache" "$DIR/cache/$modo.mkv"
+done

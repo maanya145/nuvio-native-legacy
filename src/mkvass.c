@@ -123,6 +123,12 @@ static long pausasCdn;   // quantas pausas de CDN o modulo ja fez (testes)
 // #385: os fios do mkvass sao leitura LATERAL ao video (rede_lateral). Fraca:
 // os testes que trocam rede.c por um transporte local nao precisam defini-la.
 __attribute__((weak)) void rede_lateral(int sim) { (void)sim; }
+// Cache do video: somente leituras exatas, sem mover o cursor ou pedir rede.
+// Sem moviebuffer.o, o transporte continua sendo o Range de sempre.
+__attribute__((weak)) int moviebuffer_copiar(const char *url, int64_t off,
+                                           unsigned char *dst, int n) {
+  (void)url; (void)off; (void)dst; (void)n; return 0;
+}
 // Conexao que nem abriu (curl 6, 7, 35): o no do CDN recusou, sumiu ou
 // derrubou o aperto de mao. Mesma familia do "CDN pediu calma" do #308.
 static int conexaoRecusada(int e) { return e == 6 || e == 7 || e == 35; }
@@ -571,6 +577,7 @@ typedef struct {
   // `colhidosIni` (o que o sidecar parcial trouxe) ou a faixa fechar.
   int      segurar, colhidosIni;
   int      entregas;       // 0 = a proxima e a primeira (fontes + carga cheia)
+  long     cacheN, cacheBytes; // leituras exatas satisfeitas pelo anel do video
   long     t0, ultEntrega; // ms monotonicos: pedido, ultima entrega
   long     refUltima; int refColhidos; // snapshot so quando houve progresso
   int      eventosEntregues, primeiraFala;
@@ -709,6 +716,22 @@ static void esperarVez(void) {
 }
 
 // --- pool de Ranges ----------------------------------------------------------
+
+// Usa a mesma posse do Range: buffer completo, terminado em zero, ou NULL.
+// O teto cobre os Ranges juntados (MKVASS_JUNTAR) e o bloco da varredura
+// (MKVASS_VARRE_BLOCO); o moviebuffer copia em pedacos de 64 KiB, sem mover o
+// cursor do video. Mesmo valor de MOVIEBUFFER_COPIA_MAX (mkvass nao inclui o
+// cabecalho do moviebuffer: sem ele o simbolo fraco devolve 0).
+#define MKVASS_COPIA_MAX (1024L * 1024)
+static unsigned char *rangeEmMemoria(const char *url, Off ini, long n) {
+  unsigned char *r;
+  if (ini < 0 || n <= 0 || n > MKVASS_COPIA_MAX) return NULL;
+  r = malloc((size_t)n + 1);
+  if (!r) return NULL;
+  if (moviebuffer_copiar(url, ini, r, (int)n) != n) { free(r); return NULL; }
+  r[n] = 0;
+  return r;
+}
 //
 // Fios fixos, vivos a sessao inteira: cada um guarda o seu handle da libcurl
 // (rede.c: um handle por fio), e a conexao TLS fica aberta entre pedidos. Um
@@ -716,11 +739,13 @@ static void esperarVez(void) {
 typedef struct Job {
   MkvassPreparo *dono;
   char url[sizeof estadoInicial.url];
+  char cacheUrl[sizeof estadoInicial.url]; // identidade original, mesmo apos 307
   Off  ini; long n;
   unsigned char *r; long tam, ms;
   int st, erro;               // HTTP e libcurl da resposta (ver rede_baixar_trecho_st)
   int resto;                  // rede_resto_recusado() do fio do pool, logo apos o pedido
   int semTeto;                // pedido da pre-busca: fora do teto por segundo (ver range)
+  int memoria;
   int estado;                 // 0 na fila, 1 baixando, 2 pronto
   unsigned g;                 // geracao de quem pediu (contabilidade)
   struct Job *prox;
@@ -775,17 +800,23 @@ static void *poolFio(void *u) {
       pthread_mutex_unlock(&PT);
       continue;
     }
-    if (!j->semTeto) esperarVez();
     t = agoraMs();
     j->tam = 0; j->st = j->erro = 0;
-    j->r = (unsigned char *)rede_baixar_trecho_st(j->url, prazoDe(j->n), j->ini, j->ini + j->n - 1,
-                                                  &j->tam, &j->st, &j->erro, NULL, 0);
-    j->resto = j->r ? 0 : rede_resto_recusado();
+    j->r = rangeEmMemoria(j->cacheUrl, j->ini, j->n);
+    j->memoria = j->r != NULL;
+    if (j->memoria) { j->tam = j->n; j->st = 206; j->resto = 0; }
+    else {
+      if (!j->semTeto) esperarVez();
+      t = agoraMs();
+      j->r = (unsigned char *)rede_baixar_trecho_st(j->url, prazoDe(j->n), j->ini, j->ini + j->n - 1,
+                                                   &j->tam, &j->st, &j->erro, NULL, 0);
+      j->resto = j->r ? 0 : rede_resto_recusado();
+    }
     j->ms = agoraMs() - t;
     // Contado AQUI, quando o servidor respondeu, e nao quando o fio consome:
     // a pre-busca consumida em rajada parecia 10 pedidos num segundo.
     pthread_mutex_lock(&estadoDoJob(j)->trava);
-    if (j->g == estadoDoJob(j)->geracao && !estadoDoJob(j)->parar) { estadoDoJob(j)->pedidos++; if (j->r) estadoDoJob(j)->bytes += j->tam; }
+    if (!j->memoria && j->g == estadoDoJob(j)->geracao && !estadoDoJob(j)->parar) { estadoDoJob(j)->pedidos++; if (j->r) estadoDoJob(j)->bytes += j->tam; }
     pthread_mutex_unlock(&estadoDoJob(j)->trava);
     pthread_mutex_lock(&PT);
     j->estado = 2;
@@ -800,6 +831,7 @@ static Job *submeter(Fio *f, Off ini, long n) {
   if (!j) return NULL;
   j->dono = reterEstado(estadoDoFio(f));
   snprintf(j->url, sizeof j->url, "%s", f->url);
+  snprintf(j->cacheUrl, sizeof j->cacheUrl, "%s", f->urlOrig);
   j->ini = ini; j->n = n; j->g = f->g; j->semTeto = foraDoTeto(f);
   pthread_mutex_lock(&PT);
   while (poolFios < MKVASS_PARALELOS) {
@@ -980,7 +1012,8 @@ static unsigned char *colherJobDe(Fio *f, Job *j, long *tam, int fontes) {
   pthread_mutex_unlock(&PT);
   r = j->r; *tam = j->tam;
   st = j->st; erro = j->erro; ini = j->ini; n = j->n; resto = j->resto;
-  contarRede(f, j->ms);
+  if (j->memoria) { f->cacheN++; f->cacheBytes += j->tam; }
+  else contarRede(f, j->ms);
   soltarEstado(j->dono); free(j);
   pthread_mutex_lock(&estadoDoFio(f)->trava);
   atual = f->g == estadoDoFio(f)->geracao && !estadoDoFio(f)->parar;
@@ -1012,6 +1045,14 @@ static unsigned char *range(Fio *f, Off ini, long n, long *tam) {
       Job *j = f->pre[k]; f->pre[k] = NULL;
       return colherJob(f, j, tam);
     }
+  // Este fio ja e lateral e assincrono. O parser e a publicacao continuam no
+  // caminho existente; somente a origem de uma leitura completa muda.
+  r = (char *)rangeEmMemoria(f->urlOrig, ini, n);
+  if (r) {
+    if (!minhaVez(f)) { free(r); *tam = 0; return NULL; }
+    *tam = n; f->cacheN++; f->cacheBytes += n;
+    return (unsigned char *)r;
+  }
   // Recusa definitiva ja vista: nao bate de novo no servidor. Resto recusado:
   // esta tentativa acabou (faixas.c recua 20-60 s).
   if (f->definitivo || f->restoRecusado) { *tam = 0; return NULL; }
@@ -3972,6 +4013,10 @@ sair:
   if (f->nColhidos > 0 && estadoDe(estadoDoFio(f)) != MKVASS_COMPLETO) gravarSidecar(f, 0, 1);
 
 fim:
+  if (f->cacheN) {
+    printf("[mkvass] buffer compartilhado: %ld leituras, %ld bytes sem HTTP Range\n", f->cacheN, f->cacheBytes);
+    fflush(stdout);
+  }
   guardarReferencia(f);
   soltarPrebusca(f);
   free(f->jan.p); f->jan.p = NULL; f->jan.n = 0;

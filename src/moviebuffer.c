@@ -4,6 +4,7 @@
 #if !defined(NV_DTS_FFMPEG) || defined(__EMSCRIPTEN__) || defined(NV_ANDROID)
 int moviebuffer_url(const char *s,const char *h,int m,char *o,size_t n) { (void)s;(void)h;(void)m;(void)o;(void)n;return 0; }
 void moviebuffer_stop(void) {}
+int moviebuffer_copiar(const char *u,int64_t o,unsigned char *d,int n) { (void)u;(void)o;(void)d;(void)n;return 0; }
 int moviebuffer_info(DtsBufferInfo *i) { if(i) memset(i,0,sizeof *i);return 0; }
 #else
 #include <arpa/inet.h>
@@ -37,7 +38,34 @@ struct MovieBuffer {
   char source[8192], path[96], mime[40];
 };
 static MovieBuffer *current;
+/* Somente consultas laterais e o fechamento usam esta trava. Os workers de
+ * video nao a tomam; uma consulta nao pode guardar `current` enquanto o main
+ * thread o libera. */
+static pthread_mutex_t current_lock=PTHREAD_MUTEX_INITIALIZER;
 static int stopped(MovieBuffer *s) { return __atomic_load_n(&s->stop,__ATOMIC_RELAXED); }
+int moviebuffer_copiar(const char *source,int64_t off,unsigned char *dst,int n) {
+  int got=0;DtsSourceWindow antes,depois;
+  if(!source||!dst||off<0||n<=0||n>MOVIEBUFFER_COPIA_MAX) return 0;
+  if(pthread_mutex_trylock(&current_lock)) return 0;
+  MovieBuffer *s=current;
+  if(s&&!strcmp(source,s->source)&&!stopped(s)&&
+     dts_engine_source_window(s->input,&antes)&&off>=antes.lo&&off<=antes.hi-n) {
+    /* Pedacos de <=64 KiB: cada um segura a trava do anel por um memcpy
+     * curto, e o video espera no maximo isso entre dois pedacos. */
+    while(got<n) {
+      int quer=n-got>64*1024?64*1024:n-got;
+      int k=dts_engine_source_peek(s->input,off+got,dst+got,quer);
+      if(k<=0) break;
+      got+=k;
+    }
+    /* Seek ou eviccao no meio da copia: nunca entregue um prefixo como Range
+     * completo. O chamador descarta e usa a rede de sempre. */
+    if(got!=n||!dts_engine_source_window(s->input,&depois)||depois.gen!=antes.gen||off<depois.lo)
+      got=0;
+  }
+  pthread_mutex_unlock(&current_lock);
+  return got==n?n:0;
+}
 static int send_all(MovieBuffer *s,int fd,const void *data,size_t n) {
   const char *p=data;
   while(n && !stopped(s)) {
@@ -215,7 +243,10 @@ static void *worker(void *opaque) {
   return NULL;
 }
 void moviebuffer_stop(void) {
-  MovieBuffer *s=current;if(!s)return;current=NULL;
+  pthread_mutex_lock(&current_lock);
+  MovieBuffer *s=current;current=NULL;
+  pthread_mutex_unlock(&current_lock);
+  if(!s)return;
   __atomic_store_n(&s->stop,1,__ATOMIC_RELAXED);
   dts_engine_cancel(s->input);shutdown(s->fd,SHUT_RDWR);
   pthread_mutex_lock(&s->clients_lock);
@@ -245,7 +276,9 @@ int moviebuffer_url(const char *source,const char *headers,int mib,char *out,siz
   pthread_mutex_init(&s->clients_lock,NULL);
   pthread_cond_init(&s->probe_wake,NULL);
   s->input=dts_engine_source_create(source,headers,mib);
-  s->fd=socket(AF_INET,SOCK_STREAM,0);current=s;
+  snprintf(s->source,sizeof s->source,"%s",source);
+  s->fd=socket(AF_INET,SOCK_STREAM,0);
+  pthread_mutex_lock(&current_lock);current=s;pthread_mutex_unlock(&current_lock);
   if(!s->input||s->fd<0) { moviebuffer_stop();return 0; }
   struct sockaddr_in addr;memset(&addr,0,sizeof addr);addr.sin_family=AF_INET;addr.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
   if(bind(s->fd,(struct sockaddr *)&addr,sizeof addr)||listen(s->fd,8)) {moviebuffer_stop();return 0;}
@@ -259,7 +292,7 @@ int moviebuffer_url(const char *source,const char *headers,int mib,char *out,siz
   if(path_n>=4&&!strncasecmp(source+path_n-4,".mkv",4))ext="mkv";
   else if(path_n>=4&&!strncasecmp(source+path_n-4,".mp4",4))ext="mp4";
   snprintf(s->mime,sizeof s->mime,"%s",!strcmp(ext,"mkv")?"video/x-matroska":!strcmp(ext,"mp4")?"video/mp4":"application/octet-stream");
-  snprintf(s->source,sizeof s->source,"%s",source);snprintf(s->path,sizeof s->path,"/%s/movie%s%s",token,*ext?".":"",ext);
+  snprintf(s->path,sizeof s->path,"/%s/movie%s%s",token,*ext?".":"",ext);
   int count=snprintf(out,n,"http://127.0.0.1:%u%s",ntohs(addr.sin_port),s->path);
   if(count<0||(size_t)count>=n) {moviebuffer_stop();return 0;}
   /* Origin I/O stays off the UI thread: serve() waits for this, and redirects
