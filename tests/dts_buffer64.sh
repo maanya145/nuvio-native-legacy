@@ -21,7 +21,7 @@ port=$(cat "$tmp/port")
 cc -std=gnu11 -Wall -Wextra -Werror -Wno-misleading-indentation \
   -I"$prefix/include" tests/dts_engine_avio.c src/rede.c src/redeurl.c \
   -o "$tmp/ranges" -L"$prefix/lib" -Wl,--start-group \
-  -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lm -lpthread -ldl
+  -lavformat -lavcodec -lswresample -lavutil -Wl,--end-group -lz -lm -lpthread -ldl
 "$tmp/ranges" "http://127.0.0.1:$port/parallel/range.bin"
 "$tmp/ranges" "http://127.0.0.1:$port/slow/range.bin"
 "$tmp/ranges" "http://127.0.0.1:$port/prefetch/prefetch.bin"
