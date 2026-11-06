@@ -22,14 +22,17 @@ int moviebuffer_info(DtsBufferInfo *i) { if(i) memset(i,0,sizeof *i);return 0; }
 #define MSG_NOSIGNAL 0
 #endif
 #define MB_CLIENTS 1
+/* The first player request waits this long for the origin check. Add-on links
+ * resolve through redirects that routinely take over a second. */
+#define MB_PROBE_WAIT_S 8
 typedef struct MovieBuffer MovieBuffer;
 typedef struct { MovieBuffer *s; int slot; } Client;
 struct MovieBuffer {
   DtsEngine *input;
   pthread_mutex_t clients_lock;
-  pthread_t threads[MB_CLIENTS];
+  pthread_t threads[MB_CLIENTS], probe_thread;
   Client clients[MB_CLIENTS];
-  int fd, sockets[MB_CLIENTS], threads_n, stop, fallback, probe_done, probe_ok, preemptible;
+  int fd, sockets[MB_CLIENTS], threads_n, stop, fallback, probe_started, probe_done, probe_ok, preemptible;
   pthread_cond_t probe_wake;
   char source[8192], path[96], mime[40];
 };
@@ -66,7 +69,7 @@ static int number(const char **p,int64_t *v) {
   if(*p==a) return 0;
   *v=(int64_t)n;return 1;
 }
-/* Confirm support before video.c chooses the native buffer preset. */
+/* Confirm the origin is a finite range stream before any media byte is sent. */
 static int probe_source(MovieBuffer *s) {
   int64_t total=dts_engine_source_total(s->input);
   {
@@ -101,6 +104,23 @@ static void *probe_worker(void *opaque) {
   pthread_mutex_unlock(&s->clients_lock);
   return NULL;
 }
+/* Runs on the client worker, never the UI thread. The engine belongs to the
+ * probe until it finishes, so a timed-out probe is cancelled, not shared. */
+static void wait_for_probe(MovieBuffer *s) {
+  struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
+  until.tv_sec+=MB_PROBE_WAIT_S;
+  pthread_mutex_lock(&s->clients_lock);
+  int timed_out=0;
+  while(!s->probe_done && !stopped(s) && !timed_out)
+    timed_out=pthread_cond_timedwait(&s->probe_wake,&s->clients_lock,&until)==ETIMEDOUT;
+  int done=s->probe_done;
+  pthread_mutex_unlock(&s->clients_lock);
+  if(!done && !stopped(s)) {
+    printf("[movie-buffer] origin check exceeded %d s\n",MB_PROBE_WAIT_S);fflush(stdout);
+    __atomic_store_n(&s->fallback,1,__ATOMIC_RELAXED);
+    dts_engine_cancel(s->input);
+  }
+}
 static void serve(MovieBuffer *s,int fd) {
   char request[16384]={0},method[8],path[128],header[1024];
   size_t used=0;
@@ -115,6 +135,8 @@ static void serve(MovieBuffer *s,int fd) {
   if(strcmp(path,s->path)) { respond(s,fd,404,"Not Found");return; }
   int head=!strcmp(method,"HEAD");
   if(!head && strcmp(method,"GET")) { respond(s,fd,405,"Method Not Allowed");return; }
+  wait_for_probe(s);
+  if(stopped(s)) return;
   char mime[40];
   int64_t total=dts_engine_source_total(s->input);
   snprintf(mime,sizeof mime,"%s",s->mime);
@@ -197,9 +219,11 @@ void moviebuffer_stop(void) {
   __atomic_store_n(&s->stop,1,__ATOMIC_RELAXED);
   dts_engine_cancel(s->input);shutdown(s->fd,SHUT_RDWR);
   pthread_mutex_lock(&s->clients_lock);
+  pthread_cond_broadcast(&s->probe_wake);
   for(int i=0;i<MB_CLIENTS;i++)if(s->sockets[i]>=0)shutdown(s->sockets[i],SHUT_RDWR);
   pthread_mutex_unlock(&s->clients_lock);
   for(int i=0;i<s->threads_n;i++)pthread_join(s->threads[i],NULL);
+  if(s->probe_started)pthread_join(s->probe_thread,NULL);
   close(s->fd);dts_engine_destroy(s->input);
   pthread_cond_destroy(&s->probe_wake);
   pthread_mutex_destroy(&s->clients_lock);free(s);
@@ -235,23 +259,13 @@ int moviebuffer_url(const char *source,const char *headers,int mib,char *out,siz
   if(path_n>=4&&!strncasecmp(source+path_n-4,".mkv",4))ext="mkv";
   else if(path_n>=4&&!strncasecmp(source+path_n-4,".mp4",4))ext="mp4";
   snprintf(s->mime,sizeof s->mime,"%s",!strcmp(ext,"mkv")?"video/x-matroska":!strcmp(ext,"mp4")?"video/mp4":"application/octet-stream");
-  /* Origin I/O stays off the UI thread; abandon cache startup after 500 ms. */
-  if(pthread_create(&s->threads[0],NULL,probe_worker,s)) {moviebuffer_stop();return 0;}
-  s->threads_n=1;
-  struct timespec until;clock_gettime(CLOCK_REALTIME,&until);
-  until.tv_nsec+=500000000;
-  if(until.tv_nsec>=1000000000) {until.tv_sec++;until.tv_nsec-=1000000000;}
-  pthread_mutex_lock(&s->clients_lock);
-  while(!s->probe_done) {
-    if(pthread_cond_timedwait(&s->probe_wake,&s->clients_lock,&until)==ETIMEDOUT)break;
-  }
-  int ready=s->probe_done && s->probe_ok;
-  pthread_mutex_unlock(&s->clients_lock);
-  if(!ready) {moviebuffer_stop();return 0;}
-  pthread_join(s->threads[0],NULL);s->threads_n=0;
   snprintf(s->source,sizeof s->source,"%s",source);snprintf(s->path,sizeof s->path,"/%s/movie%s%s",token,*ext?".":"",ext);
   int count=snprintf(out,n,"http://127.0.0.1:%u%s",ntohs(addr.sin_port),s->path);
   if(count<0||(size_t)count>=n) {moviebuffer_stop();return 0;}
+  /* Origin I/O stays off the UI thread: serve() waits for this, and redirects
+   * the player to the source if the origin turns out to be unsuitable. */
+  if(pthread_create(&s->probe_thread,NULL,probe_worker,s)) {moviebuffer_stop();return 0;}
+  s->probe_started=1;
   for(int i=0;i<MB_CLIENTS;i++) {s->clients[i]=(Client){s,i};if(pthread_create(&s->threads[i],NULL,worker,&s->clients[i]))break;s->threads_n++;}
   if(!s->threads_n) {moviebuffer_stop();return 0;}
   printf("[movie-buffer] single-connection native URI cache enabled: %d MiB\n",mib);fflush(stdout);
