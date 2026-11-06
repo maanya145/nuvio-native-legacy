@@ -1,7 +1,7 @@
 name: Fork host tests
 # Linux host tests for this fork's work: PGS decoding and acquisition, the
-# read-ahead proxy, the shared media buffer and the DTS helpers. Runs the same
-# groups as `bash tools/test-host.sh` (see AGENTS.md). It never builds an .ipk
+# read-ahead proxy, the shared media buffer, the DTS helpers and every mkvass
+# test. Runs the same groups as `bash tools/test-host.sh` (see AGENTS.md). It never builds an .ipk
 # and has no secrets.
 on:
   push:
@@ -45,3 +45,6 @@ jobs:
         run: bash tools/build-dts-ffmpeg.sh
       - name: Host tests (quick group)
         run: bash tools/test-host.sh quick
+      - name: Host tests (mkvass group)
+        if: ${{ !cancelled() }}
+        run: bash tools/test-host.sh mkvass

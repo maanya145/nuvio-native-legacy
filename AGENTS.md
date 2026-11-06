@@ -99,8 +99,10 @@ Known timing-sensitive checks: `tests/moviebuffer.py` asserts startup under
 them fails right after Docker starts or under heavy load, rerun it alone before
 treating it as a regression.
 
-CI (`.github/workflows/fork-host-tests.yml`) runs the quick groups on Linux for
-every push and PR to this fork.
+CI (`.github/workflows/fork-host-tests.yml`) runs the `quick` and `mkvass`
+groups on Linux for every push and PR to this fork. Linux needs explicit
+`-lm` and `-lz` where macOS does not, so link them in every test that
+compiles `src/mkvass.c` or links the static host FFmpeg.
 
 ## The TV
 
