@@ -90,6 +90,18 @@ def stats(p):
 def close(p):
     begun=time.monotonic();p.stdin.write('q\n');p.stdin.flush();p.communicate(timeout=8)
     assert p.returncode==0 and time.monotonic()-begun<8
+def copy(p,off,n,other=''):
+    p.stdin.write(f'c {off} {n} {other}\n');p.stdin.flush()
+    while True:
+        line=p.stdout.readline();assert line
+        if line.startswith('COPY '):return tuple(map(int,line.split()[1:]))
+def copy_until(p,off,n,seconds=12):
+    deadline=time.monotonic()+seconds
+    while True:
+        got,ok=copy(p,off,n);assert ok,(off,n)
+        if got==n:return
+        assert got==0,(off,n,got)
+        assert time.monotonic()<deadline,('ring never held',off,n);time.sleep(.05)
 def request(url,start,end=None,method='GET'):
     r=f'bytes={start}-'+('' if end is None else str(end))
     with urllib.request.urlopen(urllib.request.Request(url,headers={'Range':r},method=method),timeout=15) as f:
@@ -178,6 +190,31 @@ for mib in [64,128,256]:
         paused.close()
         print(f'PASS native URI {mib} MiB: full prefetch cap, byte equality, seeks, concurrent ranges, HEAD/suffix/invalid ranges, cancellation',flush=True)
     finally:close(p)
+# Side copies (subtitle collector): exact bytes, never a prefix, never stale.
+if mode in ('all','copy'):
+    MiB=1024*1024
+    p,url=daemon('/movie.mkv',64)
+    try:
+        assert url!='OFF'
+        assert request(url,0,1023)[2]==content(0,1024)
+        copy_until(p,17,MiB)                                  # 1 MiB in 64 KiB pieces
+        assert copy(p,17,MiB+1)==(0,1)                        # over the cap: miss
+        assert copy(p,17,4096,origin+'/other.mkv')==(0,1)     # another source: miss
+        assert copy(p,TOTAL-MiB,MiB)==(0,1)                   # never downloaded: miss
+        # Play forward 40 MiB: the ring advances past its physical end, so a
+        # copy straddling the wrap must come back whole and in order.
+        with urllib.request.urlopen(urllib.request.Request(url,headers={'Range':f'bytes=0-{TOTAL-1}'}),timeout=15) as f:
+            left=40*MiB
+            while left:left-=len(f.read(min(left,MiB)))
+            copy_until(p,64*MiB-MiB//2-3,MiB)
+        # Seek far ahead: the old offsets leave the window; nothing stale.
+        assert request(url,300*MiB,300*MiB+1023)[2]==content(300*MiB,1024)
+        copy_until(p,300*MiB+5,MiB)
+        assert copy(p,64*MiB-MiB//2-3,MiB)==(0,1)
+        assert copy(p,17,4096)==(0,1)
+        print('PASS side copy: exact bytes, ring wrap, cap/source/missing misses, seek invalidates',flush=True)
+    finally:close(p)
+    if mode=='copy':sys.exit(0)
 for path in ['/video.m3u8','/video.mpd']:
     p,url=daemon(path,64);assert url=='OFF';close(p)
 p,url=daemon('/movie.mkv',0);assert url=='OFF';close(p)

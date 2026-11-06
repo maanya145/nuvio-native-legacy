@@ -15,6 +15,9 @@ static char esperado[4096] = "https://example.test/pgs.mkv";
 static const char *arquivo;
 static pthread_mutex_t trava = PTHREAD_MUTEX_INITIALIZER;
 static int pedidos, semRange;
+#ifdef TEST_BUFFER_COPY
+static long copias, bytesCopiados;
+#endif
 char *rede_baixar(const char *url, int s) { (void)url; (void)s; return NULL; }
 char *rede_baixar_bin(const char *url, int s, long *n) { (void)url; (void)s; (void)n; return NULL; }
 // O mkvass pede por rede_baixar_trecho_st (status, erro e url final); o
@@ -25,6 +28,24 @@ const char *rede_url_publica(const char *url, char *dst, unsigned tam) {
 }
 long rede_corte_host(const char *url) { (void)url; return 0; }
 int rede_resto_recusado(void) { return 0; }
+#ifdef TEST_BUFFER_COPY
+// Simula o anel completo: toda leitura exata vem do arquivo local. O contador
+// prova que o coletor nao caiu no Range da rede.
+int moviebuffer_copiar(const char *url, int64_t off, unsigned char *dst, int n) {
+  FILE *f; long t;
+  if (strcmp(url, esperado) || off < 0 || n <= 0 || n > 1024 * 1024) return 0;
+  f = fopen(arquivo, "rb"); assert(f);
+  fseek(f, 0, SEEK_END); t = ftell(f);
+  if (off + n > t) { fclose(f); return 0; }
+  fseek(f, (long)off, SEEK_SET);
+  assert(fread(dst, 1, (size_t)n, f) == (size_t)n);
+  fclose(f);
+  pthread_mutex_lock(&trava);
+  copias++; bytesCopiados += n;
+  pthread_mutex_unlock(&trava);
+  return n;
+}
+#endif
 char *rede_baixar_trecho_st(const char *url, int s, long long ini, long long fim, long *tam,
                             int *status, int *erro, char *final, unsigned tamFinal) {
   FILE *f; char *p; long n;
@@ -80,5 +101,11 @@ int main(int argc, char **argv) {
   usleep(500000);
   assert(!imgsub_pegar(1.5));
   parar();
+#ifdef TEST_BUFFER_COPY
+  assert(pedidos == 0);
+  assert(copias > 0 && bytesCopiados > 0);
+  printf("mkvass_pgs_cache: %ld leituras, %ld bytes sem HTTP Range\n", copias, bytesCopiados);
+#else
   puts("mkvass_pgs: bloco PGS vira quadro no imgsub, limpeza e recusa ok");
+#endif
 }

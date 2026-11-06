@@ -128,6 +128,7 @@ struct DtsEngine {
   int64_t fx_lo, fx_hi;      /* bytes [fx_lo, fx_hi) of the file are in the ring */
   int64_t fx_req;            /* restart the read at this offset (-1: none) */
   int64_t fx_from;           /* where the current read started (read-ahead grows from it) */
+  uint64_t fx_gen;           /* bumps on every discontinuity (see DtsSourceWindow) */
   uint64_t fx_resolved_ms;   /* last time the final address was dropped for the add-on's */
   char final_url[8192];
   AVFormatContext *fmt;
@@ -423,6 +424,7 @@ static void *fx_worker(void *opaque) {
     if(e->fx_req>=0) {                       /* (re)start at the reader's offset */
       e->fx_lo=e->fx_hi=e->fx_from=e->fx_req; e->fx_req=-1;
       e->fx_eof=0; e->fx_err=0; e->fx_attempts=0;
+      e->fx_gen++;                           /* the window jumped: readers resync */
     } else if(e->fx_eof || e->fx_err || (e->total>=0 && e->fx_hi>=e->total)) {
       if(e->total>=0 && e->fx_hi>=e->total) e->fx_eof=1;
       pthread_cond_broadcast(&e->range_wake);
@@ -554,8 +556,30 @@ static void fx_close(DtsEngine *e) {
   pthread_mutex_unlock(&e->range_lock);
   if(e->fx_thread_ok) pthread_join(e->fx_thread,NULL);
   e->fx_thread_ok=0; e->fx_stop=0; e->fx_req=-1; e->fx_eof=e->fx_err=0; e->fx_lo=e->fx_hi=0;
+  e->fx_gen++;                               /* closing: any peek from now on is stale */
   if(e->fx_buf) rings_add(-e->fx_cap);
   free(e->fx_buf); e->fx_buf=NULL;
+}
+int dts_engine_source_window(DtsEngine *e,DtsSourceWindow *out) {
+  int ok;
+  if(!e||!out) return 0;
+  if(pthread_mutex_trylock(&e->range_lock)) return 0;
+  ok=e->fx_buf&&e->fx_hi>e->fx_lo;
+  out->lo=e->fx_lo; out->hi=e->fx_hi; out->gen=e->fx_gen;
+  pthread_mutex_unlock(&e->range_lock);
+  return ok;
+}
+int dts_engine_source_peek(DtsEngine *e,int64_t off,unsigned char *dst,int n) {
+  int got=0;
+  if(!e||!dst||n<=0||n>64*1024) return 0;
+  if(pthread_mutex_trylock(&e->range_lock)) return 0;
+  if(e->fx_buf && off>=e->fx_lo && off<e->fx_hi) {
+    int64_t k=e->fx_hi-off; if(k>n) k=n;
+    size_t at=(size_t)(off%FX_CAP); if((int64_t)(FX_CAP-(int64_t)at)<k) k=FX_CAP-(int64_t)at;
+    memcpy(dst,e->fx_buf+at,(size_t)k); got=(int)k;
+  }
+  pthread_mutex_unlock(&e->range_lock);
+  return got;
 }
 /* Only the embedded motor's loopback /stream route gets a startup budget.
  * Cues near EOF are optional; media reads and later seeks keep their deadline. */
