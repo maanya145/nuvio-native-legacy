@@ -97,7 +97,8 @@ prints a pass/fail summary with log paths. Group names are listed by
 Known timing-sensitive checks: `tests/moviebuffer.py` asserts startup under
 0.4 s and `tests/mkvass_alem_teto.sh` measures pacing in real time. If one of
 them fails right after Docker starts or under heavy load, rerun it alone before
-treating it as a regression.
+treating it as a regression. `TEST_RETRY="name"` makes `tools/test-host.sh` do that
+once automatically and labels the result "passed on retry".
 
 CI (`.github/workflows/fork-host-tests.yml`) runs the `quick` and `mkvass`
 groups on Linux for every push and PR to this fork. Linux needs explicit

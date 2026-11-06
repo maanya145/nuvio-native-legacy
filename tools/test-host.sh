@@ -13,6 +13,8 @@
 # reported as not verified, not as passed.
 # TEST_SKIP="name name" skips scripts by basename (used by Linux CI for tests
 # that only build on macOS); each skip is listed in the summary.
+# TEST_RETRY="name name" reruns those scripts once if they fail (CI uses it for
+# real-time pacing tests on shared runners). A retried pass says so.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
@@ -59,12 +61,21 @@ for s in "${scripts[@]}"; do
   start=$(date +%s)
   run_limited bash "$s" >"$logs/$name.log" 2>&1 </dev/null
   rc=$?
+  retried=""
+  if [ $rc -ne 0 ]; then
+    case " ${TEST_RETRY:-} " in *" $name "*)
+      mv "$logs/$name.log" "$logs/$name.first.log"
+      run_limited bash "$s" >"$logs/$name.log" 2>&1 </dev/null
+      first=$rc; rc=$?
+      retried=", passed on retry; first run rc=$first, log $name.first.log" ;;
+    esac
+  fi
   secs=$(( $(date +%s) - start ))
   if [ $rc -eq 0 ] && grep -Eq '(^|[^A-Za-z])SKIP([^A-Za-z]|$)' "$logs/$name.log"; then
     echo "SKIP  $name (${secs}s, not verified: $(grep -Em1 SKIP "$logs/$name.log" | cut -c1-80))"
     skip=$((skip + 1))
   elif [ $rc -eq 0 ]; then
-    echo "ok    $name (${secs}s)"; pass=$((pass + 1))
+    echo "ok    $name (${secs}s${retried})"; pass=$((pass + 1))
   else
     [ $rc -ge 124 ] && [ $rc -le 142 ] && [ $secs -ge "$limit" ] && note=" timeout" || note=""
     echo "FAIL  $name (rc=$rc${note}, ${secs}s)"; tail -12 "$logs/$name.log" | sed 's/^/      /'

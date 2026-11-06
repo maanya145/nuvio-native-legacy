@@ -52,4 +52,6 @@ jobs:
         # linker dropping unused video.c code. They run in the macOS mkvass group.
         env:
           TEST_SKIP: mkv_legendas mkvass mkvass_url mkvass_texto
+          # Real-time pacing measurement: one retry on shared runners, reported as such.
+          TEST_RETRY: mkvass_alem_teto
         run: bash tools/test-host.sh mkvass

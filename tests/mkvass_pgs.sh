@@ -24,7 +24,7 @@ for scenario in sparse empty malformed badzlib truncated nocues http; do
   NUVIO_DADOS="$DIR/dados" "$DIR/reliability" "$DIR/$file.mkv" "$scenario"
 done
 
-cc ${flags[@]+"${flags[@]}"} -Isrc -I/opt/homebrew/include -O1 -g -Wno-deprecated-declarations -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs_http.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c src/rede.c src/redeurl.c -lz -lpthread -lm -ldl -o "$DIR/http"
+cc ${flags[@]+"${flags[@]}"} -Isrc -I/opt/homebrew/include -O1 -g -Wno-deprecated-declarations -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs_http.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c src/rede.c src/redeurl.c -lz -lpthread -lm -ldl -o "$DIR/http" -pthread
 python3 tests/servidor_range.py "$DIR" > "$DIR/server.log" 2>&1 &
 SRV=$!
 for ((i=0; i<100; i++)); do
