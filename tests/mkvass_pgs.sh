@@ -11,20 +11,20 @@ if [ "${SANITIZE:-0}" = 1 ]; then flags+=(-fsanitize=address,undefined -fno-omit
 # ContentEncoding: sem compressao, zlib (padrao em muitos remuxes) e cabecalho
 # removido.
 python3 tests/mkvass_pgs_fixture.py "$DIR"
-cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra -DMKVASS_RANGES_POR_SEG=1000 -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -o "$DIR/test"
+cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra -DMKVASS_RANGES_POR_SEG=1000 -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -lm -o "$DIR/test"
 mkdir "$DIR/dados"
 for modo in plain zlib strip plain-scan zlib-scan strip-scan; do
   echo "== PGS $modo"
   NUVIO_DADOS="$DIR/dados" "$DIR/test" "$DIR/$modo.mkv"
 done
-cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra -DMKVASS_RANGES_POR_SEG=1000 -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs_reliability.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -o "$DIR/reliability"
+cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra -DMKVASS_RANGES_POR_SEG=1000 -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs_reliability.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -lm -o "$DIR/reliability"
 for scenario in sparse empty malformed badzlib truncated nocues http; do
   file="$scenario"; [ "$scenario" != http ] || file=sparse
   echo "== reliability $scenario"
   NUVIO_DADOS="$DIR/dados" "$DIR/reliability" "$DIR/$file.mkv" "$scenario"
 done
 
-cc ${flags[@]+"${flags[@]}"} -Isrc -I/opt/homebrew/include -O1 -g -Wno-deprecated-declarations -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs_http.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c src/rede.c src/redeurl.c -lz -lpthread -o "$DIR/http"
+cc ${flags[@]+"${flags[@]}"} -Isrc -I/opt/homebrew/include -O1 -g -Wno-deprecated-declarations -DMKVASS_PGS_SCAN_MS=50 tests/mkvass_pgs_http.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c src/rede.c src/redeurl.c -lz -lpthread -lm -o "$DIR/http"
 python3 tests/servidor_range.py "$DIR" > "$DIR/server.log" 2>&1 &
 SRV=$!
 for ((i=0; i<100; i++)); do
@@ -37,10 +37,10 @@ for route in redir/sparse norange/sparse missing; do
   expected=0; [ "$route" != redir/sparse ] || expected=1
   NUVIO_DADOS="$DIR/dados" "$DIR/http" "http://127.0.0.1:$PORT/$route.mkv" "$expected"
 done
-cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra tests/mkvass_pgs_budget.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -o "$DIR/budget"
+cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra tests/mkvass_pgs_budget.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -lm -o "$DIR/budget"
 NUVIO_DADOS="$DIR/dados" "$DIR/budget" "$DIR/sparse.mkv"
 # Forca o transporte "ja esta no anel": a mesma url nunca chega a rede.
-cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra -DMKVASS_RANGES_POR_SEG=1000 -DMKVASS_PGS_SCAN_MS=50 -DTEST_BUFFER_COPY tests/mkvass_pgs.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -o "$DIR/test-cache"
+cc ${flags[@]+"${flags[@]}"} -Isrc -O1 -g -Wall -Wextra -DMKVASS_RANGES_POR_SEG=1000 -DMKVASS_PGS_SCAN_MS=50 -DTEST_BUFFER_COPY tests/mkvass_pgs.c src/mkvass.c src/imgsub.c src/pgs.c src/legenda.c tests/mkvass_i18n.c src/assrender.c src/dados.c -lz -lm -o "$DIR/test-cache"
 mkdir "$DIR/dados-cache" "$DIR/cache"
 python3 tests/mkvass_pgs_fixture.py "$DIR/cache" 20000
 for modo in plain zlib strip; do
